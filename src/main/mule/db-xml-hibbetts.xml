@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:ftp="http://www.mulesoft.org/schema/mule/ftp"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file"
+	xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ftp http://www.mulesoft.org/schema/mule/ftp/current/mule-ftp.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="f569bcba-0080-4947-b3cc-2ba397d29636" >
+		<db:mssql-connection host="cloud-services.demos.mulesoft.com" instanceName="mssql-server" port="32679" user="sa" password="Test123!" databaseName="master" />
+	</db:config>
+	<file:config name="File_Config" doc:name="File Config" doc:id="5e3f0748-23be-43fc-92bd-22588cfa6534" >
+		<file:connection workingDir="/Users/sbangaloremunibaire/Desktop/Hibbett" />
+	</file:config>
+	<flow name="SchedulerFlow" doc:id="c9fedc00-8578-4dd1-8f14-353e2a076fd4" >
+		<scheduler doc:name="Scheduler to query MS SQL DB" doc:id="f62e8aa7-454b-4438-8c23-0b4169f6015c" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="1" timeUnit="HOURS"/>
+			</scheduling-strategy>
+		</scheduler>
+		<flow-ref doc:name="Flow Reference to execute the sub flow" doc:id="e8be4497-248f-4dde-96a8-056f7eda73f4" name="db-xml-Flow"/>
+	</flow>
+	<flow name="db-xml-Flow" doc:id="bdd92059-767c-4749-8de2-634b4ec5e88e">
+		<db:select doc:name="Aggregated 3M+ records are fetched from three tables                                  " doc:id="77194750-c0e9-45f8-bdc9-a3ab53d6c460" config-ref="Database_Config" fetchSize="25000">
+			<db:sql><![CDATA[select 
+a.product_id,
+a.location_id,
+b.product_cd,
+c.location_cd,
+a.available_qty
+from dbo.product_location a
+join dbo.system_product b
+on
+a.product_id=b.product_id
+join 
+dbo.location c
+on
+a.location_id=c.location_id
+where a.available_qty <>0]]></db:sql>
+		</db:select>
+		<ee:transform doc:name="beginTime varibale to hold value after execution of previous DB job" doc:id="94d46c22-9483-42a5-afa8-6b71080cd213" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="beginTime" ><![CDATA[%dw 2.0
+import * from dw::util::Timer
+--- 
+currentMilliseconds()]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<batch:job jobName="DB_XML_Batch_Job" doc:id="ce01b695-fef1-4a9d-a5b1-8de49490c7ef" blockSize="10000">
+			<batch:process-records >
+				<batch:step name="Batch_Step_XML_Conversion" doc:id="67c4b937-7440-40fd-ae5c-f0dfb71bdff3" >
+					<ee:transform doc:name="DB output to XML format" doc:id="b14bfe9f-a7cd-4fd9-a616-bb8e9414fa85">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+---
+{
+Snapshot: {
+product_id: payload.product_id,
+location_id: payload.location_id,
+product_cd: payload.product_cd,
+location_cd: payload.location_cd,
+available_qty: payload.available_qty
+}
+}]]></ee:set-payload>
+			</ee:message>
+						<ee:variables>
+						</ee:variables>
+		</ee:transform>
+				</batch:step>
+				<batch:step name="Batch_Step_XML_File_Creation" doc:id="f9627f27-c925-40ca-8023-c174a8dc35d3" >
+					<file:write doc:name="XML File creation with all the records" doc:id="cb507040-cbe5-48e8-8e02-83fb56832a76" config-ref="File_Config" path="/Users/sbangaloremunibaire/Desktop/Hibbett/POC3_Output/Output_file.xml" mode="APPEND" >
+					</file:write>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Brief summary of Batch process" doc:id="331d243d-0581-42ab-a1c2-1e9af5c79cc8" message="#[payload.processedRecords]"/>
+			</batch:on-complete>
+		</batch:job>
+		<ee:transform doc:name="elapseTime to determine time taken to complete batch job" doc:id="11b075cf-8d68-406a-b050-2feb75acac23" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="elapseTime" ><![CDATA[%dw 2.0
+import * from dw::util::Timer
+--- 
+currentMilliseconds() - vars.beginTime]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Display time elapse value" doc:id="be84b6fb-6d74-475b-bfb1-8f8aec366016" message='#["****************** Elpased time (msec): " ++ vars.elapseTime ++ " ******************"]'/>
+	</flow>
+</mule>
